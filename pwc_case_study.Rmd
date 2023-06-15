@@ -1,0 +1,260 @@
+---
+title: "PwC Inventory Analysis Case Study"
+author: "Kenen Corea"
+date: "2023-05-15"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = '/Users/kenencorea/Desktop/Data/PwC_Case_Study/CSVs')
+```
+
+## 1.0 Purpose
+
+The following is a comprehensive write-up detailing the steps I took to analyze the datasets provided by PwC from their inventory analysis case study. The original case study is publicly available on PwC's website and was originally intended for instructor-led students in a typical classroom setting. Because of this, the supplementary prompt and instructional slides that accompany the data are specific to this class and asks for students to interact with certain databases in SQLite in order to complete the assignment. 
+
+Because I want to complete this case study solely for the purpose of gaining more experience and to have another project under my belt, I will purposely stray away from some of the specific steps/paths that the prompt originally asks for (I am completely ditching the SQLite steps in favor of R analysis, for example, as well as using Tableau for the visualizations to wrap it all up). 
+
+Despite this, I still set out to solve the original problem at hand in the prompt, the only differences being the steps taken to get there and the different applications that I used.
+
+
+
+# 2.0 Setup
+### 2.1 Loading in Packages
+
+```{r, results=FALSE, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(skimr)
+library(janitor)
+library(magrittr)
+```
+
+
+
+### 2.2 Setting working directory
+
+```{r, results=FALSE}
+setwd("~/Desktop/Data/PwC_Case_Study/CSVs")
+```
+
+
+
+### 2.3 Loading in data and standardizing column names
+
+Loading/reading in our csv files of data provided by PwC (6 tables in total).
+```{r, results=FALSE, message=FALSE, warning=FALSE}
+beg_inv <- read_csv("BegInvDec.csv") %>% clean_names()
+end_inv <- read_csv("EndInvDec.csv") %>% clean_names()
+pricing_purchases <- read_csv("PricingPurchasesDec.csv") %>% clean_names()
+purchases <- read_csv("PurchasesDec.csv") %>% clean_names()
+sales <- read_csv("SalesDec.csv") %>% clean_names()
+vendor_invoices <- read_csv("VendorInvoicesDec.csv") %>% clean_names()
+```
+
+
+
+### 2.4 Previewing the data  
+
+To get a brief overview of each table and what they contain, we will use the `head()` and `str()` functions on each table:  
+
+```{r}
+head(beg_inv)
+str(beg_inv)
+```
+
+The inventory of every store owned by the liquor store chain at the very start of the year.  
+
+
+```{r}
+head(end_inv)
+str(end_inv)
+```
+
+The same as the last table, but for the very end of the year instead.  
+
+
+```{r}
+head(pricing_purchases)
+str(pricing_purchases)
+```
+
+The pricing of each item sold by the chain. This shows the price that stores pay for each product and the price that they sell them for. We will be using this table to calculate profits for each item for our analysis later down the line.  
+
+
+```{r}
+head(purchases)
+str(purchases)
+```
+
+The purchases of each store and the corresponding vendor and invoice information.  
+
+
+```{r}
+head(vendor_invoices)
+str(vendor_invoices)
+```
+
+The same as the last table but aggregated by vendor.  
+
+
+```{r}
+head(sales)
+str(sales)
+```
+
+The total sales and information of every transaction of each store.  
+
+Now that we have a better understanding of the data that we are working with, we can now process and clean it.
+
+
+
+# 3.0 Cleaning & Tests
+
+### 3.1 Verifying the number of stores in each table
+
+This is a simple test that will show us how many unique values there are for the `store` column in each relevant table (only the two inventory tables and the purchases and sales table have this variable). We want to make sure there aren't any missing or extra stores that will affect our analysis. As per the prompt, there should be 80 different stores in the chain.  
+
+```{r}
+n_unique(beg_inv$store)
+n_unique(end_inv$store)
+n_unique(purchases$store)
+n_unique(sales$store)
+```
+
+As you can see, we are missing a store in the beginning inventory table -- there are 79 stores instead of the 80 in every other table. In particular, the missing store is #81 - PEMBROKE. The most likely explanation is that this is a new store that was acquired sometime within that year (this would explain why it's only missing in the beginning inventory table but present in the ending inventory count and every other table).
+
+
+### 3.2 Checking for duplicates in each table
+
+This test is pretty self explanatory, we are simply checking for any duplicated instances/rows in every table. The code works by summing up every duplicated instance found. We ideally want to see 0 as the result for each line (no duplicates).
+
+```{r}
+sum(duplicated(beg_inv))
+sum(duplicated(end_inv))
+sum(duplicated(pricing_purchases))
+sum(duplicated(purchases))
+sum(duplicated(sales))
+sum(duplicated(vendor_invoices))
+```
+
+No duplicates!
+
+
+### 3.3 Cleaning and standardizing columns names of each dataframe
+
+This is where we would usually use the `clean_names` function on the tables, but I decided to do that at the very beginning when initially reading in the data.
+
+
+
+# 4.0 Data transformation, creating new columns and sub-tables
+
+### 4.1 Transforming existing tables to prepare them for analysis of certain metrics
+
+Creating a new column on the `pricing_purchases` table that calculates the gross profit of each product
+```{r, results=FALSE, message=FALSE, warning=FALSE}
+pricing_purchases %<>% mutate(profit_per_unit = (price - purchase_price))
+```
+
+Creating a temporary sub-table that only contains relevant columns to merge to the `sales` table
+```{r, results=FALSE, message=FALSE, warning=FALSE}
+units_profit <- pricing_purchases %>% select(brand, description, size, profit_per_unit)
+```
+
+Merging the new table to the `sales` table
+```{r, results=FALSE, message=FALSE, warning=FALSE}
+sales %<>% left_join(units_profit, by = c("brand", "description", "size"))
+```
+
+Creating a new column on the `sales` table that calculates the total profit per sale
+```{r, results=FALSE, message=FALSE, warning=FALSE}
+sales %<>% mutate(profit = (profit_per_unit * sales_quantity))
+```
+
+### 4.2 Creating a sub-table that lists the top 10 most profitable units across all stores
+```{r, results=FALSE, message=FALSE, warning=FALSE}
+highest_profit_items <- sales %>% 
+                        group_by(brand, description) %>% 
+                        summarize(profits = sum(profit)) %>% 
+                        arrange(desc(profits)) %>% 
+                        head(10)
+```
+```{r}
+highest_profit_items %>% head(10)
+```
+
+
+### 4.3 Creating a sub-table that lists the top 10 units in sales
+```{r, results=FALSE, message=FALSE, warning=FALSE}
+highest_sales_items <- sales %>%
+                       group_by(brand, description) %>%
+                       summarize(gross_sales = sum(sales_dollars)) %>%
+                       arrange(desc(gross_sales)) %>%
+                       head(10)
+```
+```{r}
+highest_sales_items %>% head(10)
+```
+
+
+### 4.4 Creating a sub-table that lists the top 10 vendors by sales
+```{r, results=FALSE, message=FALSE, warning=FALSE}
+top_ten_vendors_sales <- purchases %>%
+                         group_by(vendor_number, vendor_name) %>%
+                         summarize(total_payments = sum(dollars)) %>%
+                         arrange(desc(total_payments)) %>%
+                         head(10)
+```
+```{r}
+top_ten_vendors_sales %>% head(10)
+```
+
+
+### 4.5 Creating a sub-table that lists the top 10 vendors by units purchased
+```{r, results=FALSE, message=FALSE, warning=FALSE}
+top_ten_vendors_units <- purchases %>%
+                         group_by(vendor_number, vendor_name) %>%
+                         summarize(total_units_purchased = sum(quantity)) %>%
+                         arrange(desc(total_units_purchased)) %>%
+                         head(10)
+```
+```{r}
+top_ten_vendors_units %>% head(10)
+```
+
+
+### 4.6 Creating sub-tables that group the total units sold and ordered each month, then merging both into one table
+```{r, results=FALSE, message=FALSE, warning=FALSE}
+sales_per_month <- sales %>% mutate(month = month(sales_date)) %>%
+                             group_by(month) %>%
+                             summarize(quantity_sold = sum(sales_quantity))
+
+orders_per_month <- purchases %>% mutate(month = month(receiving_date)) %>% 
+                                  group_by(month) %>% 
+                                  summarize(quantity_ordered = sum(quantity))
+
+sales_and_orders_per_month <- orders_per_month %>% left_join(sales_per_month, by = c("month"))
+```
+```{r}
+sales_and_orders_per_month %>% head(12)
+```
+
+
+
+# 5.0 Exporting data
+
+Now that we have all of the relevant metrics set up in sub-tables that we want to analyze, we will export them as CSV files in order to upload them to Tableau. From there, we will be able to analyze these metrics clearer through visualizations and charts.
+
+### 5.1 Exporting our key tables to CSVs
+```{r, results=FALSE, message=FALSE, warning=FALSE}
+write_csv(highest_profit_items, "~/Desktop/Data/PwC_Case_Study/highest_profit_items.csv")
+write_csv(highest_sales_items, "~/Desktop/Data/PwC_Case_Study/highest_sales_items.csv")
+write_csv(top_ten_vendors_sales, "~/Desktop/Data/PwC_Case_Study/top_ten_vendors_sales.csv")
+write_csv(top_ten_vendors_units, "~/Desktop/Data/PwC_Case_Study/top_ten_vendors_units.csv")
+write_csv(sales_and_orders_per_month, "~/Desktop/Data/PwC_Case_Study/sales_and_orders_per_month.csv")
+```
+
+## The End (Continued on my portfolio projects page at www.kenenc.com)
+
+
